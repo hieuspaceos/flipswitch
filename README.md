@@ -39,6 +39,19 @@ hover shows a tooltip explaining what each switch does.
   one-shot, not switches.
 - Search field filters tiles live. `⌘Q` quits; click outside closes.
 
+## Install
+
+**Homebrew (recommended)**
+
+```sh
+brew tap hieuspaceos/suite && brew trust hieuspaceos/suite
+brew install --cask flipswitch
+```
+
+**Manual** — grab the DMG from
+[Releases](https://github.com/hieuspaceos/flipswitch/releases/latest), drag into
+/Applications, right-click → Open once (ad-hoc signed).
+
 ## Build & run
 
 ```sh
