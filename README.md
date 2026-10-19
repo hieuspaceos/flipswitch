@@ -58,3 +58,22 @@ Requires macOS 14+, arm64. No third-party dependencies.
 
 Mostly none. ⌃⌘Q lock and Dark Mode use System Events → macOS may ask for
 **Accessibility** once.
+## Security & trust
+
+- **Open source** — every byte of the release binary is produced from the
+  commit you can read, by GitHub Actions (see the workflow run linked in
+  each release). No opaque build steps.
+- **Checksums** — every release ships `flipswitch.dmg.sha256`. Verify:
+  ```sh
+  shasum -a 256 flipswitch.dmg
+  ```
+- **No telemetry, no account, no network calls** — the app works fully
+  offline; nothing leaves your Mac.
+- **Permissions** — flipswitch asks for none required — all toggles are public or user-triggered macOS APIs
+  and nothing else.
+- **Ad-hoc signed** — not yet notarized (needs a paid Apple Developer
+  account). On first launch macOS shows "cannot be opened because the
+  developer cannot be verified" — right-click → **Open** once, then it
+  runs normally forever after.
+- **Prefer building yourself?** `git clone`, `make`, `make run` —
+  no external dependencies, readable in one sitting.

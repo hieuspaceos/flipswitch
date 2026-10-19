@@ -1,10 +1,13 @@
 import Cocoa
 import SwiftUI
+import CoreAudio
 
 // flipswitch — free One-Switch-style menubar toggle panel.
-// Public APIs only: defaults, AppleScript, pmset, caffeinate, osascript.
-// Perf rules: no subprocess on the render path; states refresh async once
-// per panel-open; toggle state updates optimistically.
+// Public APIs only: defaults, NSAppleScript (in-process AppleEvents),
+// CoreAudio HAL, pmset, caffeinate. osascript survives only as last-resort
+// fallback on audio devices lacking HAL properties.
+// Perf rules: no subprocess on the render path; states + dependency checks
+// refresh async once per panel-open; toggle state updates optimistically.
 
 // MARK: - Toggle model
 
@@ -15,8 +18,11 @@ struct SwitchItem: Identifiable {
     var tint: NSColor
     /// True = transient action (Lock, Sleep, Trash) — no ON state.
     var action = false
-    /// Tile hidden when its dependency (blueutil, user shortcut) is absent.
+    /// Dependency check (blueutil, user shortcut) — may spawn a subprocess;
+    /// evaluated once, off-main, on first panel open. Cached in `isAvailable`.
     var available: () -> Bool = { true }
+    /// Cached availability — the only thing read on the render path.
+    var isAvailable = true
     var experimental = false
     var desc = ""
     var isOn: Bool = false
@@ -33,6 +39,80 @@ func sh(_ cmd: String) -> (Int32, String) {
     try? p.run(); p.waitUntilExit()
     return (p.terminationStatus,
             String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "")
+}
+
+/// Runs AppleScript source in-process — AppleEvent without spawning
+/// `osascript`. Call off-main; returns the error dict (nil on success) so
+/// callers can keep shell-style `||` fallback semantics.
+@discardableResult
+func applescript(_ source: String) -> NSDictionary? {
+    var err: NSDictionary?
+    NSAppleScript(source: source)?.executeAndReturnError(&err)
+    return err
+}
+
+func audioAddr(_ selector: AudioObjectPropertySelector,
+               _ scope: AudioObjectPropertyScope,
+               _ element: AudioObjectPropertyElement) -> AudioObjectPropertyAddress {
+    AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: element)
+}
+
+func defaultAudioDevice(_ scope: AudioObjectPropertyScope) -> AudioDeviceID {
+    var id = AudioDeviceID(0), size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    var addr = audioAddr(kAudioHardwarePropertyDefaultOutputDevice,
+                         kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain)
+    if scope == kAudioDevicePropertyScopeInput {
+        addr.mSelector = kAudioHardwarePropertyDefaultInputDevice
+    }
+    AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id)
+    return id
+}
+
+/// First settable element for `scope` — modern devices expose only the main
+/// element (0); older ones carry per-channel properties starting at 1.
+func audioElement(_ dev: AudioDeviceID, _ scope: AudioObjectPropertyScope,
+                  _ selector: AudioObjectPropertySelector) -> AudioObjectPropertyElement? {
+    for el in [kAudioObjectPropertyElementMain, AudioObjectPropertyElement(1)] {
+        var addr = audioAddr(selector, scope, el)
+        var settable = DarwinBoolean(false)
+        if AudioObjectHasProperty(dev, &addr),
+           AudioObjectIsPropertySettable(dev, &addr, &settable) == noErr,
+           settable.boolValue { return el }
+    }
+    return nil
+}
+
+func outputMuted(_ dev: AudioDeviceID) -> Bool? {
+    guard let el = audioElement(dev, kAudioDevicePropertyScopeOutput,
+                                kAudioDevicePropertyMute) else { return nil }
+    var addr = audioAddr(kAudioDevicePropertyMute, kAudioDevicePropertyScopeOutput, el)
+    var v = UInt32(0), size = UInt32(MemoryLayout<UInt32>.size)
+    return AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &v) == noErr ? v != 0 : nil
+}
+
+func setOutputMuted(_ dev: AudioDeviceID, _ muted: Bool) {
+    guard let el = audioElement(dev, kAudioDevicePropertyScopeOutput,
+                                kAudioDevicePropertyMute) else { return }
+    var addr = audioAddr(kAudioDevicePropertyMute, kAudioDevicePropertyScopeOutput, el)
+    var v = UInt32(muted ? 1 : 0)
+    AudioObjectSetPropertyData(dev, &addr, 0, nil, UInt32(MemoryLayout<UInt32>.size), &v)
+}
+
+/// Default-input scalar 0–1 — mirrors `input volume of (get volume settings)` / 100.
+func inputVolume(_ dev: AudioDeviceID) -> Float? {
+    guard let el = audioElement(dev, kAudioDevicePropertyScopeInput,
+                                kAudioDevicePropertyVolumeScalar) else { return nil }
+    var addr = audioAddr(kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyScopeInput, el)
+    var v = Float(0), size = UInt32(MemoryLayout<Float>.size)
+    return AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &v) == noErr ? v : nil
+}
+
+func setInputVolume(_ dev: AudioDeviceID, _ scalar: Float) {
+    guard let el = audioElement(dev, kAudioDevicePropertyScopeInput,
+                                kAudioDevicePropertyVolumeScalar) else { return }
+    var addr = audioAddr(kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyScopeInput, el)
+    var v = scalar
+    AudioObjectSetPropertyData(dev, &addr, 0, nil, UInt32(MemoryLayout<Float>.size), &v)
 }
 
 final class Switches: ObservableObject {
@@ -92,7 +172,8 @@ final class Switches: ObservableObject {
                    tint: .systemBlue,
                    probe: { UserDefaults.standard.persistentDomain(forName: ".GlobalPreferences")?["AppleInterfaceStyle"] as? String == "Dark" },
                    flip: { on in
-                       sh("osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to \(on)'")
+                       // in-process AppleEvent — no osascript spawn
+                       applescript("tell application \"System Events\" to tell appearance preferences to set dark mode to \(on)")
                    }),
             SwitchItem(id: "stage", name: "Stage Mgr", icon: "rectangle.3.group",
                    tint: .systemMint,
@@ -108,12 +189,14 @@ final class Switches: ObservableObject {
             SwitchItem(id: "dnd", name: "Do Not Disturb", icon: "moon.zzz.fill",
                    tint: .systemIndigo,
                    available: { Switches.shared.hasShortcut("Toggle DND") },
+                   isAvailable: false,
                    experimental: true,
                    probe: { false },
                    flip: { _ in sh("shortcuts run 'Toggle DND' 2>/dev/null") }),
             SwitchItem(id: "nightshift", name: "Night Shift", icon: "moon.stars.fill",
                    tint: .systemYellow,
                    available: { Switches.shared.hasShortcut("Toggle Night Shift") },
+                   isAvailable: false,
                    experimental: true,
                    probe: { false },
                    flip: { _ in sh("shortcuts run 'Toggle Night Shift' 2>/dev/null") }),
@@ -121,31 +204,48 @@ final class Switches: ObservableObject {
             SwitchItem(id: "mute", name: "Mute Mic", icon: "mic.slash.fill",
                    tint: .systemOrange,
                    probe: {
-                       // probe only runs off-main on panel open — subprocess OK
+                       // off-main only; HAL first, osascript fallback for odd devices
+                       if let v = inputVolume(defaultAudioDevice(kAudioDevicePropertyScopeInput)) {
+                           return v <= 0
+                       }
                        let (rc, o) = sh("osascript -e 'input volume of (get volume settings)'")
                        return rc == 0 && o.trimmingCharacters(in: .whitespacesAndNewlines) == "0"
                    },
                    flip: { on in
-                       // setMasterVolume via osascript — AVF property write is unreliable
+                       // kAudioDevicePropertyVolumeScalar on default input —
+                       // AudioObjectSetPropertyData, no subprocess
+                       let dev = defaultAudioDevice(kAudioDevicePropertyScopeInput)
                        if on {
-                           let v = sh("osascript -e 'input volume of (get volume settings)'").1
-                           UserDefaults.standard.set(v.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "prevInputVolume")
-                           sh("osascript -e 'set volume input volume 0'")
+                           if let v = inputVolume(dev) {
+                               UserDefaults.standard.set(v, forKey: "prevInputVolume")
+                               setInputVolume(dev, 0)
+                           } else {
+                               let v = sh("osascript -e 'input volume of (get volume settings)'").1
+                               UserDefaults.standard.set(v.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "prevInputVolume")
+                               sh("osascript -e 'set volume input volume 0'")
+                           }
                        } else {
-                           let v = UserDefaults.standard.string(forKey: "prevInputVolume") ?? "50"
-                           sh("osascript -e 'set volume input volume \(v)'")
+                           // legacy value is a 0–100 string; scalar wants 0–1
+                           let v = UserDefaults.standard.float(forKey: "prevInputVolume")
+                           setInputVolume(dev, v > 1 ? v / 100 : (v > 0 ? v : 0.5))
                        }
                    }),
             SwitchItem(id: "spk", name: "Mute Speakers", icon: "speaker.slash.fill",
                    tint: .systemRed,
                    probe: {
+                       if let m = outputMuted(defaultAudioDevice(kAudioDevicePropertyScopeOutput)) {
+                           return m
+                       }
                        let (rc, o) = sh("osascript -e 'output muted of (get volume settings)'")
                        return rc == 0 && o.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
                    },
-                   flip: { on in sh("osascript -e 'set volume output muted \(on)'") }),
+                   flip: { on in
+                       setOutputMuted(defaultAudioDevice(kAudioDevicePropertyScopeOutput), on)
+                   }),
             SwitchItem(id: "bt", name: "Bluetooth", icon: "antenna.radiowaves.left.and.right",
                    tint: .systemBlue,
                    available: { Switches.shared.has("blueutil") },
+                   isAvailable: false,
                    probe: {
                        let (rc, o) = sh("blueutil -p 2>/dev/null")
                        return rc == 0 && o.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
@@ -191,7 +291,10 @@ final class Switches: ObservableObject {
             SwitchItem(id: "trash", name: "Empty Trash", icon: "trash",
                    tint: .systemRed, action: true,
                    flip: { _ in
-                       sh("osascript -e 'tell application \"Finder\" to empty trash' 2>/dev/null || rm -rf ~/.Trash/*")
+                       // Finder AppleEvent in-process; rm fallback when denied
+                       if applescript("tell application \"Finder\" to empty trash") != nil {
+                           sh("rm -rf ~/.Trash/* 2>/dev/null")
+                       }
                    }),
             SwitchItem(id: "lock", name: "Lock", icon: "lock.fill",
                    tint: .systemGray, action: true,
@@ -199,7 +302,9 @@ final class Switches: ObservableObject {
                        // CGSession was removed in macOS 26 — ⌃⌘Q via System Events
                        // (needs Accessibility); fallback sleeps the display, which
                        // locks on wake when 'require password' is set.
-                       sh("osascript -e 'tell application \"System Events\" to keystroke \"q\" using {command down, control down}' 2>/dev/null || pmset displaysleepnow")
+                       if applescript("tell application \"System Events\" to keystroke \"q\" using {command down, control down}") != nil {
+                           sh("pmset displaysleepnow")
+                       }
                    }),
             SwitchItem(id: "sleep", name: "Sleep", icon: "powersleep",
                    tint: .systemTeal, action: true,
@@ -210,14 +315,26 @@ final class Switches: ObservableObject {
 
     /// Re-probe real states off the main thread, publish once.
     /// Called on panel open — the only moment subprocesses run.
+    /// Dependency checks (`available()`) are evaluated exactly once, lazily,
+    /// on this first call and cached in `SwitchItem.isAvailable` so the
+    /// render path never touches a subprocess.
+    private var availabilityProbed = false
     func refresh() {
         let items = toggles
+        let probeAvailability = !availabilityProbed
+        availabilityProbed = true
         DispatchQueue.global(qos: .userInitiated).async {
             var states: [String: Bool] = [:]
             for t in items where t.probe != nil { states[t.id] = t.probe!() }
+            var avail: [String: Bool]? = nil
+            if probeAvailability {
+                avail = [:]
+                for t in items { avail![t.id] = t.available() }
+            }
             DispatchQueue.main.async {
                 for i in self.toggles.indices {
                     if let v = states[self.toggles[i].id] { self.toggles[i].isOn = v }
+                    if let v = avail?[self.toggles[i].id] { self.toggles[i].isAvailable = v }
                 }
             }
         }
@@ -240,7 +357,7 @@ struct PanelView: View {
     @State private var query = ""
 
     var filtered: [SwitchItem] {
-        let vis = s.toggles.filter { $0.available() }
+        let vis = s.toggles.filter { $0.isAvailable }
         return query.isEmpty ? vis
                : vis.filter { $0.name.lowercased().contains(query.lowercased()) }
     }
