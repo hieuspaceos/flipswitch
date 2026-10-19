@@ -195,7 +195,12 @@ final class Switches: ObservableObject {
                    }),
             SwitchItem(id: "lock", name: "Lock", icon: "lock.fill",
                    tint: .systemGray, action: true,
-                   flip: { _ in sh("'/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession' -suspend") }),
+                   flip: { _ in
+                       // CGSession was removed in macOS 26 — ⌃⌘Q via System Events
+                       // (needs Accessibility); fallback sleeps the display, which
+                       // locks on wake when 'require password' is set.
+                       sh("osascript -e 'tell application \"System Events\" to keystroke \"q\" using {command down, control down}' 2>/dev/null || pmset displaysleepnow")
+                   }),
             SwitchItem(id: "sleep", name: "Sleep", icon: "powersleep",
                    tint: .systemTeal, action: true,
                    flip: { _ in sh("pmset displaysleepnow") }),
