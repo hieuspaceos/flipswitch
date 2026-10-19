@@ -18,6 +18,7 @@ struct SwitchItem: Identifiable {
     /// Tile hidden when its dependency (blueutil, user shortcut) is absent.
     var available: () -> Bool = { true }
     var experimental = false
+    var desc = ""
     var isOn: Bool = false
     /// Reads real system state — may spawn a subprocess; call off-main only.
     var probe: (() -> Bool)?
@@ -58,6 +59,25 @@ final class Switches: ObservableObject {
     }
 
     private init() {
+        let descs: [String: String] = [
+            "desktop": "Hide every icon on the desktop",
+            "hidden": "Reveal hidden files in Finder",
+            "dark": "Toggle dark appearance",
+            "stage": "Toggle Stage Manager",
+            "dock": "Auto-hide the Dock",
+            "dnd": "Toggle Do Not Disturb — needs a Shortcut named 'Toggle DND'",
+            "nightshift": "Toggle Night Shift — needs a Shortcut named 'Toggle Night Shift'",
+            "mute": "Mute/unmute microphone input",
+            "spk": "Mute/unmute speaker output",
+            "bt": "Toggle Bluetooth — needs blueutil",
+            "wifi": "Toggle Wi-Fi power",
+            "awake": "Prevent display sleep",
+            "lpm": "Toggle Low Power Mode (needs admin)",
+            "clipboard": "Clear the pasteboard",
+            "trash": "Empty the Trash",
+            "lock": "Lock the screen now",
+            "sleep": "Turn the display off",
+        ]
         toggles = [
             // system
             SwitchItem(id: "desktop", name: "Desktop", icon: "desktopcomputer",
@@ -180,7 +200,7 @@ final class Switches: ObservableObject {
                    tint: .systemTeal, action: true,
                    flip: { _ in sh("pmset displaysleepnow") }),
         ]
-
+        for i in toggles.indices { toggles[i].desc = descs[toggles[i].id] ?? "" }
     }
 
     /// Re-probe real states off the main thread, publish once.
@@ -305,6 +325,7 @@ struct Tile: View {
         .animation(.easeOut(duration: 0.12), value: hovered)
         .animation(.spring(response: 0.3), value: t.isOn)
         .onHover { hovered = $0 }
+        .help(t.desc)
         .contentShape(Rectangle())
         .onTapGesture {
             spin()
