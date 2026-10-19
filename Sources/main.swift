@@ -220,7 +220,7 @@ struct PanelView: View {
                : vis.filter { $0.name.lowercased().contains(query.lowercased()) }
     }
 
-    let cols = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+    let cols = [GridItem(.fixed(126), spacing: 10), GridItem(.fixed(126), spacing: 10)]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -240,10 +240,13 @@ struct PanelView: View {
 
             Divider().opacity(0.5)
 
-            LazyVGrid(columns: cols, spacing: 10) {
-                ForEach(filtered) { t in Tile(t: t).onTapGesture { s.flip(t) } }
+            ScrollView {
+                LazyVGrid(columns: cols, spacing: 10) {
+                    ForEach(filtered) { t in Tile(t: t).onTapGesture { s.flip(t) } }
+                }
+                .padding(14)
             }
-            .padding(14)
+            .frame(maxHeight: 400)
 
             Divider().opacity(0.5)
 
@@ -256,7 +259,7 @@ struct PanelView: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
         }
-        .frame(width: 300)
+        .frame(width: 290)
     }
 }
 
@@ -281,7 +284,7 @@ struct Tile: View {
                 .foregroundStyle(t.isOn ? .primary : .secondary)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 78)
         .padding(.vertical, 12)
         .background(RoundedRectangle(cornerRadius: 12)
             .fill(t.isOn ? Color(nsColor: t.tint).opacity(0.12)
