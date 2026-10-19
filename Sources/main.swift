@@ -220,18 +220,19 @@ struct PanelView: View {
                : vis.filter { $0.name.lowercased().contains(query.lowercased()) }
     }
 
-    let cols = [GridItem(.fixed(126), spacing: 10), GridItem(.fixed(126), spacing: 10)]
+    let cols = [GridItem(.fixed(130), spacing: 10), GridItem(.fixed(130), spacing: 10)]
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "switch.2").font(.system(size: 15, weight: .semibold))
-                Text("flipswitch").font(.system(size: 14, weight: .semibold))
+                Text("flipswitch").font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1).fixedSize()
                 Spacer()
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.tertiary)
                     TextField("Search", text: $query).textFieldStyle(.plain).font(.callout)
-                        .frame(width: 110)
+                        .frame(width: 80)
                 }
                 .padding(.horizontal, 8).padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 7).fill(.quaternary))
@@ -242,7 +243,7 @@ struct PanelView: View {
 
             ScrollView {
                 LazyVGrid(columns: cols, spacing: 10) {
-                    ForEach(filtered) { t in Tile(t: t).onTapGesture { s.flip(t) } }
+                    ForEach(filtered) { t in Tile(t: t) }
                 }
                 .padding(14)
             }
@@ -259,7 +260,7 @@ struct PanelView: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
         }
-        .frame(width: 290)
+        .frame(width: 300)
     }
 }
 
@@ -267,23 +268,32 @@ struct PanelView: View {
 struct Tile: View {
     let t: SwitchItem
     @State private var hovered = false
+    @State private var flipped = false   // 180° spin on each tap
+
+    func spin() {
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { flipped.toggle() }
+    }
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             ZStack {
                 Circle()
                     .fill(t.isOn ? Color(nsColor: t.tint)
                                  : Color(nsColor: .quaternaryLabelColor))
-                    .frame(width: 46, height: 46)
+                    .frame(width: 36, height: 36)
                 Image(systemName: t.icon)
-                    .font(.system(size: 19, weight: .medium))
+                    .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(t.isOn ? .white : .secondary)
             }
+            // the name-sake "flip": icon rotates 180° each activation
+            .rotation3DEffect(.degrees(flipped ? 180 : 0),
+                              axis: (x: 0, y: 1, z: 0))
             Text(t.name)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(t.isOn ? .primary : .secondary)
                 .lineLimit(1)
         }
+
         .frame(maxWidth: .infinity, minHeight: 78)
         .padding(.vertical, 12)
         .background(RoundedRectangle(cornerRadius: 12)
@@ -295,6 +305,11 @@ struct Tile: View {
         .animation(.easeOut(duration: 0.12), value: hovered)
         .animation(.spring(response: 0.3), value: t.isOn)
         .onHover { hovered = $0 }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            spin()
+            Switches.shared.flip(t)
+        }
     }
 }
 
