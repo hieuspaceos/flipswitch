@@ -50,7 +50,7 @@ brew install --cask flipswitch
 
 **Manual** — grab the DMG from
 [Releases](https://github.com/hieuspaceos/flipswitch/releases/latest), drag into
-/Applications, right-click → Open once (ad-hoc signed).
+/Applications and open (Developer ID signed + notarized).
 
 ## Build & run
 
@@ -84,9 +84,8 @@ Mostly none. ⌃⌘Q lock and Dark Mode use System Events → macOS may ask for
   offline; nothing leaves your Mac.
 - **Permissions** — flipswitch asks for none required — all toggles are public or user-triggered macOS APIs
   and nothing else.
-- **Ad-hoc signed** — not yet notarized (needs a paid Apple Developer
-  account). On first launch macOS shows "cannot be opened because the
-  developer cannot be verified" — right-click → **Open** once, then it
-  runs normally forever after.
+- **Signed & notarized** — release builds are signed with a Developer ID
+  certificate and notarized by Apple; macOS opens them with no Gatekeeper
+  warning.
 - **Prefer building yourself?** `git clone`, `make`, `make run` —
   no external dependencies, readable in one sitting.
