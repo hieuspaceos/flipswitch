@@ -7,7 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>flipswitch</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.swiftshot.app</string>
+	<string>com.flipswitch.app</string>
 	<key>CFBundleExecutable</key>
 	<string>flipswitch</string>
 	<key>CFBundlePackageType</key>
